@@ -1,0 +1,6 @@
+# Build outputs
+out/
+*.gz
+
+# Docker
+.kotlin/

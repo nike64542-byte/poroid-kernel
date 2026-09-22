@@ -1,0 +1,70 @@
+name: 构建内核 (poroid-kernel)
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'podroid_kernel.config'
+      - 'Dockerfile'
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: 'Linux 内核版本'
+        required: false
+        default: '7.1.5'
+        type: string
+      push_to_release:
+        description: '上传到 GitHub Release'
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  build-kernel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 释放磁盘空间
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc 2>/dev/null || true
+          df -h
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 构建内核
+        run: |
+          KVER="${{ github.event.inputs.kernel_version || '7.1.5' }}"
+          echo "KERNEL_VERSION=${KVER}" >> $GITHUB_ENV
+          docker build --network=host \
+            --build-arg "KERNEL_VERSION=${KVER}" \
+            -t podroid-kernel-builder --target kernel-builder .
+
+      - name: 提取产物
+        run: |
+          docker rm -f podroid-kernel-extract 2>/dev/null || true
+          docker create --name podroid-kernel-extract podroid-kernel-builder
+          mkdir -p out
+          docker cp podroid-kernel-extract:/output/vmlinuz-virt out/vmlinuz-virt
+          docker rm podroid-kernel-extract >/dev/null
+          ls -lh out/vmlinuz-virt
+
+      - name: 上传内核产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: vmlinuz-virt
+          path: out/vmlinuz-virt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 上传到 Release
+        if: inputs.push_to_release != false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || \
+            gh release create latest --title "最新内核" --notes "Kernel $KERNEL_VERSION" --prerelease
+          gh release upload latest out/vmlinuz-virt --clobber
